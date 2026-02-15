@@ -2,3 +2,11 @@ spring:
   config:
     activate:
       on-profile: local
+
+integration:
+  places:
+    base-url: ${PLACES_BASE_URL:https://api.example.com}
+  weather:
+    base-url: ${WEATHER_BASE_URL:https://api.example.com}
+  fx:
+    base-url: ${FX_BASE_URL:https://api.exchangerate.host}
