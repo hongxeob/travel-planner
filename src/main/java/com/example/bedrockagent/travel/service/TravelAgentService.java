@@ -11,6 +11,8 @@ import com.example.bedrockagent.travel.tool.PlaceSearchTool;
 import com.example.bedrockagent.travel.tool.WeatherTool;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -19,6 +21,8 @@ import java.util.List;
 
 @Service
 public class TravelAgentService {
+
+    private static final Logger log = LoggerFactory.getLogger(TravelAgentService.class);
 
     private static final String WEATHER_FALLBACK_ASSUMPTION = "Weather data unavailable. Used destination defaults.";
     private static final String FX_FALLBACK_ASSUMPTION = "Exchange rate unavailable. Budget conversion may be inaccurate.";
@@ -44,22 +48,26 @@ public class TravelAgentService {
     }
 
     public TravelPlanResponse plan(TravelPlanRequest request) {
-        PlaceResult place = placeSearchTool.apply(request.destination());
+        long startedAt = System.currentTimeMillis();
+
+        PlaceResult place = callTool("placeSearch", () -> placeSearchTool.apply(request.destination()));
 
         List<String> fallbackAssumptions = new ArrayList<>();
 
         WeatherResult weather;
         try {
-            weather = weatherTool.apply(place.lat(), place.lon(), request.days());
-        } catch (Exception ignored) {
+            weather = callTool("weather", () -> weatherTool.apply(place.lat(), place.lon(), request.days()));
+        } catch (Exception ex) {
+            log.warn("TOOL_CALL_FAIL tool=weather reason={}", ex.getMessage());
             weather = new WeatherResult(List.of());
             fallbackAssumptions.add(WEATHER_FALLBACK_ASSUMPTION);
         }
 
         ExchangeRateResult exchangeRate;
         try {
-            exchangeRate = exchangeRateTool.apply("KRW", "JPY");
-        } catch (Exception ignored) {
+            exchangeRate = callTool("exchangeRate", () -> exchangeRateTool.apply("KRW", "JPY"));
+        } catch (Exception ex) {
+            log.warn("TOOL_CALL_FAIL tool=exchangeRate reason={}", ex.getMessage());
             exchangeRate = new ExchangeRateResult("KRW", "JPY", BigDecimal.ZERO);
             fallbackAssumptions.add(FX_FALLBACK_ASSUMPTION);
         }
@@ -76,7 +84,7 @@ public class TravelAgentService {
         List<String> assumptions = new ArrayList<>(safeList(parsed.assumptions()));
         assumptions.addAll(fallbackAssumptions);
 
-        return new TravelPlanResponse(
+        TravelPlanResponse response = new TravelPlanResponse(
                 parsed.summary(),
                 safeList(parsed.itinerary()),
                 parsed.budget(),
@@ -84,6 +92,9 @@ public class TravelAgentService {
                 assumptions,
                 parsed.traceId()
         );
+
+        log.info("TRAVEL_PLAN_DONE durationMs={}", System.currentTimeMillis() - startedAt);
+        return response;
     }
 
     private TravelPlanResponse parseModelResponse(String content) {
@@ -94,8 +105,26 @@ public class TravelAgentService {
         }
     }
 
+    private <T> T callTool(String toolName, ToolSupplier<T> supplier) {
+        long startedAt = System.currentTimeMillis();
+        log.info("TOOL_CALL_START tool={}", toolName);
+        try {
+            T result = supplier.get();
+            log.info("TOOL_CALL_END tool={} durationMs={} status=success", toolName, System.currentTimeMillis() - startedAt);
+            return result;
+        } catch (RuntimeException ex) {
+            log.info("TOOL_CALL_END tool={} durationMs={} status=failed", toolName, System.currentTimeMillis() - startedAt);
+            throw ex;
+        }
+    }
+
     private List<String> safeList(List<String> values) {
         return values == null ? List.of() : values;
+    }
+
+    @FunctionalInterface
+    private interface ToolSupplier<T> {
+        T get();
     }
 
     public TravelPlanResponse fallbackResponse(String traceId) {
