@@ -13,10 +13,15 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.List;
 
 @Service
 public class TravelAgentService {
+
+    private static final String WEATHER_FALLBACK_ASSUMPTION = "Weather data unavailable. Used destination defaults.";
+    private static final String FX_FALLBACK_ASSUMPTION = "Exchange rate unavailable. Budget conversion may be inaccurate.";
 
     private final PlaceSearchTool placeSearchTool;
     private final WeatherTool weatherTool;
@@ -40,8 +45,24 @@ public class TravelAgentService {
 
     public TravelPlanResponse plan(TravelPlanRequest request) {
         PlaceResult place = placeSearchTool.apply(request.destination());
-        WeatherResult weather = weatherTool.apply(place.lat(), place.lon(), request.days());
-        ExchangeRateResult exchangeRate = exchangeRateTool.apply("KRW", "JPY");
+
+        List<String> fallbackAssumptions = new ArrayList<>();
+
+        WeatherResult weather;
+        try {
+            weather = weatherTool.apply(place.lat(), place.lon(), request.days());
+        } catch (Exception ignored) {
+            weather = new WeatherResult(List.of());
+            fallbackAssumptions.add(WEATHER_FALLBACK_ASSUMPTION);
+        }
+
+        ExchangeRateResult exchangeRate;
+        try {
+            exchangeRate = exchangeRateTool.apply("KRW", "JPY");
+        } catch (Exception ignored) {
+            exchangeRate = new ExchangeRateResult("KRW", "JPY", BigDecimal.ZERO);
+            fallbackAssumptions.add(FX_FALLBACK_ASSUMPTION);
+        }
 
         String modelRaw = modelClient.generate(
                 TravelPrompts.systemPrompt(),
@@ -51,7 +72,18 @@ public class TravelAgentService {
                 exchangeRateTool
         );
 
-        return parseModelResponse(modelRaw);
+        TravelPlanResponse parsed = parseModelResponse(modelRaw);
+        List<String> assumptions = new ArrayList<>(safeList(parsed.assumptions()));
+        assumptions.addAll(fallbackAssumptions);
+
+        return new TravelPlanResponse(
+                parsed.summary(),
+                safeList(parsed.itinerary()),
+                parsed.budget(),
+                safeList(parsed.weatherAlerts()),
+                assumptions,
+                parsed.traceId()
+        );
     }
 
     private TravelPlanResponse parseModelResponse(String content) {
@@ -60,6 +92,10 @@ public class TravelAgentService {
         } catch (JsonProcessingException e) {
             throw new IllegalStateException("Invalid model response", e);
         }
+    }
+
+    private List<String> safeList(List<String> values) {
+        return values == null ? List.of() : values;
     }
 
     public TravelPlanResponse fallbackResponse(String traceId) {
