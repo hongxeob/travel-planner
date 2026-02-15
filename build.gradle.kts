@@ -31,6 +31,8 @@ dependencies {
     implementation("org.springframework.retry:spring-retry")
     implementation("org.springframework.ai:spring-ai-starter-model-bedrock-converse")
 
+    implementation("org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.5")
+
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.springframework.cloud:spring-cloud-contract-wiremock:4.2.0")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
